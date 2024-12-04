@@ -27,7 +27,6 @@ def spatialSVD(
     maxiter,
     eps,
     verbose,
-    normalize,
     L_inv_,
     initialize,
     fast_option,
@@ -55,8 +54,7 @@ def spatialSVD(
     tuple: U, V, L matrices from the decomposition, best lambda, lambda errors, and number of iterations.
     """
     n = X.shape[0]  # Number of samples
-    srn, fold1, fold2, G, mst = get_folds_disconnected_G(edge_df)  # Get folds and the minimum spanning tree
-    folds = {0: fold1, 1: fold2}
+    srn, folds, G, mst = get_folds_disconnected_G(edge_df)  # Get folds and the minimum spanning tree
 
     lambd_grid = (lamb_start * np.power(step_size, np.arange(grid_len))).tolist()  # Create lambda grid
     lambd_grid.insert(0, 1e-04)
@@ -76,7 +74,7 @@ def spatialSVD(
         V = V.T
         L = np.diag(L)
 
-    lambd_list = [1,2]
+    lambd_list = [0,1,2]
     score = 1
     niter = 0
     while score > eps and niter < maxiter:
@@ -90,19 +88,19 @@ def spatialSVD(
         P_V_old = np.dot(V, V.T)
         X_hat_old = (P_U_old @ X[idx, :]) @ P_V_old
         if fast_option:
-            if lambd_list[-1]==lambd_list[-2]:
-                U, lambd, lambd_errs = update_U_tilde(X, V, L, G, weights, folds, lambd_grid, normalize, L_inv_, fast=True, lambd_prev=lambd_list[-1])
+            if lambd_list[-1]==lambd_list[-2]==lambd_list[-3]:
+                U, lambd, lambd_errs = update_U_tilde(X, V, L, G, weights, folds, lambd_grid, L_inv_, fast=True, lambd_prev=lambd_list[-1])
             else:
-                U, lambd, lambd_errs = update_U_tilde(X, V, L, G, weights, folds, lambd_grid, normalize, L_inv_, fast=False, lambd_prev=lambd_list[-1])
+                U, lambd, lambd_errs = update_U_tilde(X, V, L, G, weights, folds, lambd_grid, L_inv_, fast=False, lambd_prev=lambd_list[-1])
         else:
-            U, lambd, lambd_errs = update_U_tilde(X, V, L, G, weights, folds, lambd_grid, normalize, L_inv_, fast=False, lambd_prev=lambd_list[-1])
+            U, lambd, lambd_errs = update_U_tilde(X, V, L, G, weights, folds, lambd_grid, L_inv_, fast=False, lambd_prev=lambd_list[-1])
 
         lambd_list.append(lambd)
 
         if sparsity:
-            V, L = update_V_L_tilde(X, U, folds, beta_grid, normalize, sparsity=True)   
+            V, L, beta_errs = update_V_L_tilde(X, U, folds, beta_grid, sparsity=True)   
         else:
-            V, L = update_V_L_tilde(X, U, folds, beta_grid, normalize, sparsity=False)
+            V, L, beta_errs = update_V_L_tilde(X, U, folds, beta_grid, sparsity=False)
 
         P_U = np.dot(U[idx, :], U[idx, :].T)
         P_V = np.dot(V, V.T)
@@ -114,7 +112,7 @@ def spatialSVD(
         
     print(f"SpatialSVD ran for {niter} steps.")
 
-    return U, V, L, lambd, lambd_errs, niter
+    return U, V, L, lambd, lambd_errs, beta_errs, niter
 
 
 
@@ -134,15 +132,15 @@ def lambda_search_init(j, folds, X, G, weights, lambd_grid):
     tuple: The index of the fold, list of errors for each lambda, best M matrix, and best lambda value.
     """
     fold = folds[j]
-    X_tilde = interpolate_X(X, G, folds, j)  # Interpolate missing values for the fold
-    X_j = X[fold, :]  # Extract the data for the current fold
+    X_tilde = interpolate_X(X, G, folds, j)  
+    X_j = X[fold, :]  
   
     errs = []
     best_err = float("inf")
     M_best = None
     lambd_best = 0
 
-    ssnal = pycvxcluster.pycvxcluster.SSNAL(verbose=0)  # Initialize the SSNAL solver
+    ssnal = pycvxcluster.pycvxcluster.SSNAL(verbose=0)  
 
     for fitn, lambd in enumerate(lambd_grid):
         ssnal.gamma = lambd
@@ -167,7 +165,7 @@ def lambda_search_init(j, folds, X, G, weights, lambd_grid):
 
 
 
-def lambda_search(j, folds, X, V, L, G, weights, lambd_grid, normalize, L_inv_):
+def lambda_search(j, folds, X, V, L, G, weights, lambd_grid, L_inv_):
     """
     Performs lambda search for updating U matrix.
 
@@ -192,9 +190,10 @@ def lambda_search(j, folds, X, V, L, G, weights, lambd_grid, normalize, L_inv_):
     if L_inv_:
         print("Taking L_inv...")
         XVL_tinv = (X_tilde @ V) @ np.diag(L_inv)
+        X_j = X[fold, :]
     else:
         XVL_tinv = X_tilde @ V
-    X_j = X[fold, :]
+        X_j = X[fold, :] @ V
   
     errs = []
     best_err = float("inf")
@@ -219,8 +218,8 @@ def lambda_search(j, folds, X, V, L, G, weights, lambd_grid, normalize, L_inv_):
         if L_inv_:
             E = (U_tilde @ L) @ V.T
         else:
-            E = U_tilde @ V.T
-        err = norm(X_j - E[fold, :])
+            E = U_tilde 
+        err = norm(X_j - E[fold, :])/len(fold)
         errs.append(err)
         if err < best_err:
             lambd_best = lambd
@@ -247,7 +246,7 @@ def initial_svd(X, G, weights, folds, lambd_grid):
     lambds_best = []
     lambd_errs = {"fold_errors": {}, "final_errors": []}
     
-    with Pool(2) as p:
+    with Pool(5) as p:
         results = p.starmap(
             lambda_search_init,
             [(j, folds, X, G, weights, lambd_grid) for j in folds.keys()],
@@ -257,7 +256,7 @@ def initial_svd(X, G, weights, folds, lambd_grid):
         lambd_errs["fold_errors"][j] = errs
         lambds_best.append(lambd_best)
 
-    cv_errs = np.add(lambd_errs["fold_errors"][0], lambd_errs["fold_errors"][1])
+    cv_errs = np.sum([lambd_errs["fold_errors"][i] for i in range(5)], axis=0)
     lambd_cv = lambd_grid[np.argmin(cv_errs)]
 
     ssnal = pycvxcluster.pycvxcluster.SSNAL(gamma=lambd_cv, verbose=0)
@@ -269,7 +268,7 @@ def initial_svd(X, G, weights, folds, lambd_grid):
 
 
 
-def update_U_tilde(X, V, L, G, weights, folds, lambd_grid, normalize, L_inv_, fast, lambd_prev):
+def update_U_tilde(X, V, L, G, weights, folds, lambd_grid, L_inv_, fast, lambd_prev):
     """
     Updates the U matrix using the current V and L matrices.
 
@@ -298,17 +297,17 @@ def update_U_tilde(X, V, L, G, weights, folds, lambd_grid, normalize, L_inv_, fa
     if fast:
         lambd_cv = lambd_prev
     else:
-        with Pool(2) as p:
+        with Pool(5) as p:
             results = p.starmap(
                 lambda_search,
-                [(j, folds, X, V, L, G, weights, lambd_grid, normalize, L_inv_) for j in folds.keys()],
+                [(j, folds, X, V, L, G, weights, lambd_grid, L_inv_) for j in folds.keys()],
             )
         for result in results:
             j, errs, _, lambd_best = result
             lambd_errs["fold_errors"][j] = errs
             lambds_best.append(lambd_best)
 
-        cv_errs = np.add(lambd_errs["fold_errors"][0], lambd_errs["fold_errors"][1])
+        cv_errs = np.sum([lambd_errs["fold_errors"][i] for i in range(5)], axis=0)
         lambd_cv = lambd_grid[np.argmin(cv_errs)]
 
     ssnal = pycvxcluster.pycvxcluster.SSNAL(gamma=lambd_cv, verbose=0)
@@ -322,19 +321,13 @@ def update_U_tilde(X, V, L, G, weights, folds, lambd_grid, normalize, L_inv_, fa
         print('Taking SVD of U...')
         U_hat, _, _ = svd(U_tilde, full_matrices=False)
 
-    #if normalize:
-    #    print('Normalizing...')
-    #    U_hat = U_tilde @ sqrtm((inv(U_tilde.T @ U_tilde)))
-    #else:
-    #    print('Taking QR...')
-    #    U_hat, R = qr(U_tilde)
     print(f"Optimal lambda is {lambd_cv}...")
 
     return U_hat, lambd_cv, lambd_errs
 
 
 
-def update_V_L_tilde(X, U_tilde, folds, beta_grid, normalize, sparsity=False):
+def update_V_L_tilde(X, U_tilde, folds, beta_grid, sparsity=False):
     """
     Updates the V and L matrices using the current U matrix.
 
@@ -346,14 +339,14 @@ def update_V_L_tilde(X, U_tilde, folds, beta_grid, normalize, sparsity=False):
     Returns:
     tuple: The updated V matrix and the updated L matrix.
     """
+    beta_errs = {"fold_errors": {}, "final_errors": []}
+    betas_best = []
+
     if sparsity:
         betas_best = []
-        beta_errs = {"fold_errors": {}, "final_errors": []}
-
         XTU = X.T @ U_tilde
 
-
-        with Pool(2) as p:
+        with Pool(5) as p:
             results = p.starmap(
                 beta_search,
                 [(j, folds, X, U_tilde, beta_grid) for j in folds.keys()],
@@ -363,7 +356,7 @@ def update_V_L_tilde(X, U_tilde, folds, beta_grid, normalize, sparsity=False):
             beta_errs["fold_errors"][j] = errs
             betas_best.append(beta_best)
 
-        cv_errs = np.add(beta_errs["fold_errors"][0], beta_errs["fold_errors"][1])
+        cv_errs = np.sum([beta_errs["fold_errors"][i] for i in range(5)], axis=0)
         beta_cv = beta_grid[np.argmin(cv_errs)]
 
         V = cp.Variable(XTU.shape)
@@ -376,13 +369,10 @@ def update_V_L_tilde(X, U_tilde, folds, beta_grid, normalize, sparsity=False):
     else:
         V_mul = np.dot(X.T, U_tilde)
 
-    if normalize:
-        V_hat, L_hat, _ = svd(V_mul, full_matrices=False)
-        L_hat = np.diag(L_hat)
-    else:
-        V_hat, L_hat = qr(V_mul)
-        L_hat = np.diag(np.diag(L_hat))
-    return V_hat, L_hat
+    V_hat, L_hat, _ = svd(V_mul, full_matrices=False)
+    L_hat = np.diag(L_hat)
+
+    return V_hat, L_hat, beta_errs
 
 
 
@@ -417,9 +407,11 @@ def beta_search(j, folds, X, U, beta_grid):
         problem = cp.Problem(objective)
 
         problem.solve()
-        V_hat = V.value
+        V_mul = V.value
+        V_hat, L_hat, _ = svd(V_mul, full_matrices=False)
+        L_hat = np.diag(L_hat)
 
-        E = U @ V_hat.T
+        E = U @ L_hat @ V_hat.T
         err = np.linalg.norm(X_j - np.delete(E, fold, axis=0))
         errs.append(err)
         
