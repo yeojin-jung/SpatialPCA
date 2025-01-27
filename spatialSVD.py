@@ -409,7 +409,7 @@ def beta_search(j, folds, X, U, beta_grid, L, V_prev):
         problem.solve()
         V_hat = V.value
         L_hat = np.diag(np.diag(V_hat.T @ X.T @ U))
-        E = U @ L @ V_hat.T
+        E = U @ L_hat @ V_hat.T
         err = np.linalg.norm(np.delete(U @ L @ V_prev.T, fold,  axis=0) - np.delete(E, fold, axis=0))/len(fold)
         errs.append(err)
         if err < best_err:
