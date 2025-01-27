@@ -58,8 +58,7 @@ def spatialSVD(
 
     lambd_grid = (lamb_start * np.power(step_size, np.arange(grid_len))).tolist()  
     lambd_grid.insert(0, 1e-04)
-    beta_grid = (lamb_start * np.power(step_size, np.arange(grid_len+15))).tolist()  
-    beta_grid.insert(0, 1e-04)
+    beta_grid = (0.0001 * np.power(step_size+0.3, np.arange(grid_len+15))).tolist()  
 
     lambd_grid_init = (0.0001 * np.power(1.5, np.arange(15))).tolist()
     lambd_grid_init.insert(0, 1e-06)
@@ -99,9 +98,9 @@ def spatialSVD(
         lambd_list.append(lambd)
 
         if sparsity:
-            V, L, beta_errs = update_V_L_tilde(X, U, L, folds, beta_grid, sparsity=True)   
+            V, L, beta_errs = update_V_L_tilde(X, U, L, folds, beta_grid, V, sparsity=True)   
         else:
-            V, L, beta_errs = update_V_L_tilde(X, U, L, folds, beta_grid, sparsity=False)
+            V, L, beta_errs = update_V_L_tilde(X, U, L, folds, beta_grid, V, sparsity=False)
 
         P_U = np.dot(U[idx, :], U[idx, :].T)
         P_V = np.dot(V, V.T)
@@ -328,7 +327,7 @@ def update_U_tilde(X, V, L, G, weights, folds, lambd_grid, L_inv_, fast, lambd_p
 
 
 
-def update_V_L_tilde(X, U_tilde, L, folds, beta_grid, sparsity=False):
+def update_V_L_tilde(X, U_tilde, L, folds, beta_grid, V_prev, sparsity=False):
     """
     Updates the V and L matrices using the current U matrix.
 
@@ -345,19 +344,19 @@ def update_V_L_tilde(X, U_tilde, L, folds, beta_grid, sparsity=False):
 
     if sparsity:
         betas_best = []
-        XTU = X.T @ U_tilde
+        XTU = X.T @ U_tilde @ np.diag(1/np.diag(L))
 
         with Pool(5) as p:
             results = p.starmap(
                 beta_search,
-                [(j, folds, X, U_tilde, beta_grid, L) for j in folds.keys()],
+                [(j, folds, X, U_tilde, beta_grid, L, V_prev) for j in folds.keys()],
             )
         for result in results:
             j, errs, _, beta_best = result
             beta_errs["fold_errors"][j] = errs
             betas_best.append(beta_best)
 
-        cv_errs = np.sum([beta_errs["fold_errors"][i] for i in range(5)], axis=0)
+        cv_errs = np.sum([beta_errs["fold_errors"][i] for i in range(3)], axis=0)
         beta_cv = beta_grid[np.argmin(cv_errs)]
 
         V = cp.Variable(XTU.shape)
@@ -365,19 +364,19 @@ def update_V_L_tilde(X, U_tilde, L, folds, beta_grid, sparsity=False):
         objective = cp.Minimize(cp.norm(XTU - V, "fro")**2 + beta_cv * cp.sum(row_norms))
         problem = cp.Problem(objective)
         problem.solve()
-        V_mul = V.value
+        V_hat = V.value
+        L_hat = np.diag(np.diag(V_hat.T @ X.T @ U_tilde))
         print(f"Optimal beta is {beta_cv}...")
     else:
         V_mul = np.dot(X.T, U_tilde)
-
-    V_hat, L_hat, _ = svd(V_mul, full_matrices=False)
-    L_hat = np.diag(L_hat)
+        V_hat, L_hat, _ = svd(V_mul, full_matrices=False)
+        L_hat = np.diag(L_hat)
 
     return V_hat, L_hat, beta_errs
 
 
 
-def beta_search(j, folds, X, U, beta_grid, L):
+def beta_search(j, folds, X, U, beta_grid, L, V_prev):
     """
     Performs initial beta search for each fold with an L2,1 penalty.
 
@@ -392,7 +391,7 @@ def beta_search(j, folds, X, U, beta_grid, L):
     tuple: The index of the fold, list of errors for each beta, best V matrix, and best beta value.
     """
     fold = folds[j]
-    XTU = X[fold, :].T @ U[fold, :]
+    XTU = X[fold, :].T @ U[fold, :] @ np.diag(1/np.diag(L))
     X_j = np.delete(X, fold, axis=0)
 
     errs = []
@@ -408,14 +407,11 @@ def beta_search(j, folds, X, U, beta_grid, L):
         problem = cp.Problem(objective)
 
         problem.solve()
-        V_mul = V.value
-        V_hat, L_hat, _ = svd(V_mul, full_matrices=False)
-        L_hat = np.diag(L_hat)
-
-        E = U @ L_hat @ V_hat.T
-        err = np.linalg.norm(X_j - np.delete(E, fold, axis=0))/len(fold)
+        V_hat = V.value
+        L_hat = np.diag(np.diag(V_hat.T @ X.T @ U))
+        E = U @ L @ V_hat.T
+        err = np.linalg.norm(np.delete(U @ L @ V_prev.T, fold,  axis=0) - np.delete(E, fold, axis=0))/len(fold)
         errs.append(err)
-        
         if err < best_err:
             beta_best = beta
             V_best = V_hat
