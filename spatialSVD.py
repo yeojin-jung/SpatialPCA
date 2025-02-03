@@ -87,6 +87,7 @@ def spatialSVD(
         P_U_old = np.dot(U_samp, U_samp.T)
         P_V_old = np.dot(V, V.T)
         X_hat_old = (P_U_old @ X[idx, :]) @ P_V_old
+        U_prev = U
         if fast_option:
             if lambd_list[-1]==lambd_list[-2]==lambd_list[-3]:
                 U, lambd, lambd_errs = update_U_tilde(X, V, L, G, weights, folds, lambd_grid, L_inv_, fast=True, lambd_prev=lambd_list[-1])
@@ -98,9 +99,9 @@ def spatialSVD(
         lambd_list.append(lambd)
 
         if sparsity:
-            V, L, beta_errs = update_V_L_tilde(X, U, L, folds, beta_grid, V, sparsity=True)   
+            V, L, beta_errs = update_V_L_tilde(X, U, L, folds, beta_grid, V, U_prev, G,  sparsity=True)   
         else:
-            V, L, beta_errs = update_V_L_tilde(X, U, L, folds, beta_grid, V, sparsity=False)
+            V, L, beta_errs = update_V_L_tilde(X, U, L, folds, beta_grid, V, U_prev, G, sparsity=False)
 
         P_U = np.dot(U[idx, :], U[idx, :].T)
         P_V = np.dot(V, V.T)
@@ -327,7 +328,7 @@ def update_U_tilde(X, V, L, G, weights, folds, lambd_grid, L_inv_, fast, lambd_p
 
 
 
-def update_V_L_tilde(X, U_tilde, L, folds, beta_grid, V_prev, sparsity=False):
+def update_V_L_tilde(X, U_tilde, L, folds, beta_grid, V_prev, U_prev, G, sparsity=False):
     """
     Updates the V and L matrices using the current U matrix.
 
@@ -344,12 +345,12 @@ def update_V_L_tilde(X, U_tilde, L, folds, beta_grid, V_prev, sparsity=False):
 
     if sparsity:
         betas_best = []
-        XTU = X.T @ U_tilde @ np.diag(1/np.diag(L))
+        XTU = X.T @ U_tilde 
 
         with Pool(5) as p:
             results = p.starmap(
                 beta_search,
-                [(j, folds, X, U_tilde, beta_grid, L, V_prev) for j in folds.keys()],
+                [(j, folds, X, U_tilde, beta_grid, L, V_prev, U_prev, G) for j in folds.keys()],
             )
         for result in results:
             j, errs, _, beta_best = result
@@ -364,8 +365,9 @@ def update_V_L_tilde(X, U_tilde, L, folds, beta_grid, V_prev, sparsity=False):
         objective = cp.Minimize(cp.norm(XTU - V, "fro")**2 + beta_cv * cp.sum(row_norms))
         problem = cp.Problem(objective)
         problem.solve()
-        V_hat = V.value
-        L_hat = np.diag(np.diag(V_hat.T @ X.T @ U_tilde))
+        V_mul = V.value
+        V_hat, L_hat, _ = svd(V_mul, full_matrices=False)
+        L_hat = np.diag(L_hat)
         print(f"Optimal beta is {beta_cv}...")
     else:
         V_mul = np.dot(X.T, U_tilde)
@@ -376,7 +378,7 @@ def update_V_L_tilde(X, U_tilde, L, folds, beta_grid, V_prev, sparsity=False):
 
 
 
-def beta_search(j, folds, X, U, beta_grid, L, V_prev):
+def beta_search(j, folds, X, U, beta_grid, L, V_prev, U_prev, G):
     """
     Performs initial beta search for each fold with an L2,1 penalty.
 
@@ -391,8 +393,9 @@ def beta_search(j, folds, X, U, beta_grid, L, V_prev):
     tuple: The index of the fold, list of errors for each beta, best V matrix, and best beta value.
     """
     fold = folds[j]
-    XTU = X[fold, :].T @ U[fold, :] @ np.diag(1/np.diag(L))
-    X_j = np.delete(X, fold, axis=0)
+    X_tilde = interpolate_X(X, G, folds, j)
+    XTU = X_tilde.T @ U
+    X_j = X[fold, :].T @ U[fold, :]
 
     errs = []
     best_err = float("inf")
@@ -408,12 +411,13 @@ def beta_search(j, folds, X, U, beta_grid, L, V_prev):
 
         problem.solve()
         V_hat = V.value
-        L_hat = np.diag(np.diag(V_hat.T @ X.T @ U))
-        E = U @ L_hat @ V_hat.T
-        err = np.linalg.norm(np.delete(U @ L @ V_prev.T, fold,  axis=0) - np.delete(E, fold, axis=0))/len(fold)
+        # L_hat = np.diag(np.diag(V_hat.T @ X.T @ U))
+        E = U @ V_hat.T
+        err = np.linalg.norm(V_hat - X_j)/len(fold)
         errs.append(err)
         if err < best_err:
             beta_best = beta
             V_best = V_hat
             best_err = err
+
     return j, errs, V_best, beta_best
