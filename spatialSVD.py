@@ -397,7 +397,7 @@ def beta_search(j, folds, X, U, beta_grid, L, V_prev):
     errs = []
     best_err = float("inf")
     V_best = None
-    beta_best = 0
+    beta_best = 0 
 
     for beta in beta_grid:
         V = cp.Variable(XTU.shape)
@@ -416,5 +416,4 @@ def beta_search(j, folds, X, U, beta_grid, L, V_prev):
             beta_best = beta
             V_best = V_hat
             best_err = err
-
     return j, errs, V_best, beta_best
