@@ -8,12 +8,16 @@ import seaborn as sns
 from sklearn.neighbors import NearestNeighbors
 import networkx as nx
 
+from sklearn.cluster import KMeans
+from sklearn.metrics import accuracy_score
+from scipy.optimize import linear_sum_assignment
+from sklearn.neighbors import kneighbors_graph
+from sklearn.cluster import SpectralClustering
+from scipy.sparse import csgraph
+from scipy.sparse.linalg import eigsh
+
 from scipy.sparse import csr_matrix
 from scipy.optimize import linear_sum_assignment
-
-import utils.spatial_lda.model
-from utils.spatial_lda.featurization import make_merged_difference_matrices
-
 
 def get_mst(edge_df):
     """
@@ -65,28 +69,30 @@ def get_folds(mst):
     return srn, fold1, fold2
 
 
-def get_folds_disconnected_G(edge_df):
+def get_folds_disconnected_G(edge_df, nfolds=2):
     """
     Generates folds for each connected subgraph in a potentially disconnected graph.
 
     Parameters:
     edge_df (pd.DataFrame): A DataFrame containing the edges of the graph with columns "src" and "tgt".
+    nfolds (int): The number of folds to generate.
 
     Returns:
-    tuple: The source node, `fold1`, `fold2`, the graph `G`, and the MST `mst`.
+    tuple: The source node, `folds`, the graph `G`, and the MST `mst`.
     """
     G = nx.from_pandas_edgelist(edge_df, "src", "tgt")
     connected_subgraphs = list(nx.connected_components(G))
-    fold1 = []
-    fold2 = []
+    folds = {i: [] for i in range(nfolds)}
     for graph in connected_subgraphs:
         G_sub = G.subgraph(graph)
         mst = nx.minimum_spanning_tree(G_sub)
         srn = np.random.choice(mst.nodes)
         path = get_shortest_paths(mst, srn)
-        fold1.extend([key for key, value in path.items() if value % 2 == 0])
-        fold2.extend([key for key, value in path.items() if value % 2 == 1])
-    return srn, fold1, fold2, G, mst
+        for node, length in path.items():
+            folds[length % nfolds].append(node)
+        #fold1.extend([key for key, value in path.items() if value % 2 == 0])
+        #fold2.extend([key for key, value in path.items() if value % 2 == 1])
+    return srn, folds, G, mst
 
 
 def interpolate_X(X, G, folds, foldnum):
@@ -244,8 +250,6 @@ def get_l2_err(W, W_hat):
     total_l2_error = row_errors.sum()
 
     return total_l2_error / W_hat.shape[0]
-
-
 
 
 
@@ -452,14 +456,6 @@ def get_Kfolds(n, nfolds):
     return folds
 
 
-from sklearn.cluster import KMeans
-from sklearn.metrics import accuracy_score
-from scipy.optimize import linear_sum_assignment
-from sklearn.neighbors import kneighbors_graph
-from sklearn.cluster import SpectralClustering
-from scipy.sparse import csgraph
-from scipy.sparse.linalg import eigsh
-
 def group_and_compare(U, coords_df):
     true_groups = coords_df['grp']
     num_clusters = len(true_groups.unique())
@@ -560,3 +556,13 @@ def multinomial_from_rows(V, n=100):
         W[i, :] = np.random.multinomial(n, V[i, :])
 
     return W
+
+def plot_fold_cv(lambd_grid, lambd_errs, lambd, N):
+    cv_final = lambd
+    for j, fold_errs in lambd_errs["fold_errors"].items():
+        plt.plot(np.log(lambd_grid), fold_errs, label=f"Fold {j}", marker="o")
+    plt.xlabel("Lambda")
+    plt.ylabel("Errors")
+    plt.title(f"Lambda CV = {cv_final}")
+    plt.legend()
+    plt.show()
