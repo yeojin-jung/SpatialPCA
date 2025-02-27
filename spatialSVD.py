@@ -58,19 +58,18 @@ def spatialSVD(
 
     lambd_grid = (lamb_start * np.power(step_size, np.arange(grid_len))).tolist()  
     lambd_grid.insert(0, 1e-04)
-    beta_grid = (0.0001 * np.power(step_size+0.3, np.arange(grid_len+15))).tolist()  
+    beta_grid = (0.0001 * np.power(step_size, np.arange(grid_len+25))).tolist()  
 
     lambd_grid_init = (0.0001 * np.power(1.5, np.arange(15))).tolist()
     lambd_grid_init.insert(0, 1e-06)
+    lambd, lambd_errs, beta_errs = 0, 0, 0
 
     if initialize:
-        print('Initializing..')
-        M, _, _ = initial_svd(X, G, weights, folds, lambd_grid_init)  
-        U, L, V = svds(M, k=K, solver='propack', maxiter=300)
-        V = V.T
+        print('Initializing...')
+        U, V, L = ssvd_initial(X, method="theory", alpha_method=0.1, alpha_theory=0.6, huber_beta=0.95, sigma=None, r=K) 
         L = np.diag(L)
     else:
-        U, L, V = svds(X, k=K, solver='propack')  
+        U, L, V = svds(X, k=K, solver='propack',ncv=2*K)  
         V = V.T
         L = np.diag(L)
 

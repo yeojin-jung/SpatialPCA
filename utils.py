@@ -8,16 +8,15 @@ import seaborn as sns
 from sklearn.neighbors import NearestNeighbors
 import networkx as nx
 
-from sklearn.cluster import KMeans
-from sklearn.metrics import accuracy_score
-from scipy.optimize import linear_sum_assignment
-from sklearn.neighbors import kneighbors_graph
-from sklearn.cluster import SpectralClustering
-from scipy.sparse import csgraph
-from scipy.sparse.linalg import eigsh
-
 from scipy.sparse import csr_matrix
 from scipy.optimize import linear_sum_assignment
+
+import utils.spatial_lda.model
+from utils.spatial_lda.featurization import make_merged_difference_matrices
+import warnings
+from scipy.stats import norm as stats_norm
+from scipy.sparse.linalg import svds
+
 
 def get_mst(edge_df):
     """
@@ -69,30 +68,19 @@ def get_folds(mst):
     return srn, fold1, fold2
 
 
-def get_folds_disconnected_G(edge_df, nfolds=2):
-    """
-    Generates folds for each connected subgraph in a potentially disconnected graph.
-
-    Parameters:
-    edge_df (pd.DataFrame): A DataFrame containing the edges of the graph with columns "src" and "tgt".
-    nfolds (int): The number of folds to generate.
-
-    Returns:
-    tuple: The source node, `folds`, the graph `G`, and the MST `mst`.
-    """
+def get_folds_disconnected_G(edge_df):
     G = nx.from_pandas_edgelist(edge_df, "src", "tgt")
     connected_subgraphs = list(nx.connected_components(G))
-    folds = {i: [] for i in range(nfolds)}
+    folds = {i: [] for i in range(5)}
     for graph in connected_subgraphs:
         G_sub = G.subgraph(graph)
         mst = nx.minimum_spanning_tree(G_sub)
         srn = np.random.choice(mst.nodes)
         path = get_shortest_paths(mst, srn)
         for node, length in path.items():
-            folds[length % nfolds].append(node)
-        #fold1.extend([key for key, value in path.items() if value % 2 == 0])
-        #fold2.extend([key for key, value in path.items() if value % 2 == 1])
+            folds[length % 5].append(node)
     return srn, folds, G, mst
+
 
 
 def interpolate_X(X, G, folds, foldnum):
@@ -250,6 +238,8 @@ def get_l2_err(W, W_hat):
     total_l2_error = row_errors.sum()
 
     return total_l2_error / W_hat.shape[0]
+
+
 
 
 
@@ -456,6 +446,14 @@ def get_Kfolds(n, nfolds):
     return folds
 
 
+from sklearn.cluster import KMeans
+from sklearn.metrics import accuracy_score
+from scipy.optimize import linear_sum_assignment
+from sklearn.neighbors import kneighbors_graph
+from sklearn.cluster import SpectralClustering
+from scipy.sparse import csgraph
+from scipy.sparse.linalg import eigsh
+
 def group_and_compare(U, coords_df):
     true_groups = coords_df['grp']
     num_clusters = len(true_groups.unique())
@@ -557,12 +555,86 @@ def multinomial_from_rows(V, n=100):
 
     return W
 
-def plot_fold_cv(lambd_grid, lambd_errs, lambd, N):
-    cv_final = lambd
-    for j, fold_errs in lambd_errs["fold_errors"].items():
-        plt.plot(np.log(lambd_grid), fold_errs, label=f"Fold {j}", marker="o")
-    plt.xlabel("Lambda")
-    plt.ylabel("Errors")
-    plt.title(f"Lambda CV = {cv_final}")
-    plt.legend()
-    plt.show()
+def mad(x, constant=1.4826):
+    med = np.median(x)
+    return constant * np.median(np.abs(x - med))
+
+def holm_robust(x, alpha=0.05):
+    x = np.asarray(x)
+    n = len(x)
+    
+    ord_desc = np.argsort(-x)
+    med_x = np.median(x)
+    mad_x = mad(x)  
+    z_scores = (x - med_x) / (mad_x if mad_x != 0 else 1e-8)
+    pvalues = 1.0 - stats_norm.cdf(z_scores)
+    alpha_adjust = alpha / np.arange(n, 0, -1)
+    TF = pvalues[ord_desc] < alpha_adjust
+    
+    if TF.size == 0:
+        return np.array([], dtype=int)
+    if TF[0]:
+        idx_false = np.where(TF == False)[0]
+        if len(idx_false) == 0:
+            ans = ord_desc
+        else:
+            ans = ord_desc[:idx_false[0]]
+    else:
+        ans = np.array([], dtype=int)
+    return ans
+
+def get_subset(x, method="theory", alpha_method=0.1, alpha_theory=0.2, sigma=None, df=np.inf):
+    x = np.asarray(x)
+    
+    if sigma is None and method == "theory":
+        raise ValueError("sigma must be provided (or estimated) when method='theory'.")
+
+    if method == "theory":
+        # Threshold = 1 + alpha_theory * sqrt(log(df)/df)
+        threshold = 1.0 + alpha_theory * np.sqrt(np.log(df) / df)
+        ans = np.where(x / (sigma**2) / df > threshold)[0]
+    elif method == "method":
+        ans = holm_robust(x, alpha=alpha_method)
+    else:
+        raise ValueError("method must be either 'theory' or 'method'.")
+    
+    return ans
+
+def huberize(x, huber_beta=0.95):
+    x = np.asarray(x)
+    x_huber = x**2
+    delta = np.quantile(x_huber, huber_beta)
+    sel = x_huber > delta
+    x_huber[sel] = 2.0 * np.sqrt(delta) * np.abs(x[sel]) - delta
+    return x_huber
+
+def ssvd_initial(x, method="theory", alpha_method=0.05, alpha_theory=1.5,
+                 huber_beta=0.95, sigma=None, r=1):
+    x = np.asarray(x)
+    pu, pv = x.shape  
+    if sigma is None:
+        sigma_hat = mad(x.ravel())
+    else:
+        sigma_hat = sigma
+    if method == "theory":
+        x_huber = x**2
+    else:
+        x_huber = huberize(x, huber_beta=huber_beta)
+    colnorm2 = np.sum(x_huber, axis=0)
+    I_col = get_subset(colnorm2, method=method, alpha_method=alpha_method,
+                       alpha_theory=alpha_theory, sigma=sigma_hat, df=pu)
+    print(f"Number of selected columns: {len(I_col)}")
+    if len(I_col) < r:
+        warnings.warn("SSVD.initial: Number of selected columns less than rank!")
+        I_col = np.argsort(-colnorm2)[:min(r + 10, pv)]
+    
+    # Keep ALL rows (no selection of rows)
+    I_row = np.arange(pu) 
+    x_sub = x[I_row][:, I_col]
+    U_sub, S_sub, Vt_sub = svds(x_sub, k=r, solver='propack')
+    
+    u_hat = U_sub
+    v_hat = np.zeros((pv, r), dtype=U_sub.dtype)
+    v_hat[I_col, :] = Vt_sub.T
+    
+    return u_hat, v_hat, S_sub
