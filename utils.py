@@ -61,7 +61,7 @@ def reorder_with_noise(v, order, K, r):
         return sorted_row[order]
     
 
-def generate_W_strong(coords_df, N, n, p, K, r):
+def generate_W_strong(coords_df, n, p, K, r):
     """
     Generate a strong weight matrix W.
 
@@ -103,7 +103,7 @@ def generate_W_strong(coords_df, N, n, p, K, r):
     return normalized_W # Return the normalized weight matrix W.
 
 
-def generate_graph(N, n, p, K, r):
+def generate_graph(n, p, K, r):
     """
     Generate a graph with specified properties.
 
