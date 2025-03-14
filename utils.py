@@ -11,8 +11,8 @@ import networkx as nx
 from scipy.sparse import csr_matrix
 from scipy.optimize import linear_sum_assignment
 
-import utils.spatial_lda.model
-from utils.spatial_lda.featurization import make_merged_difference_matrices
+#import utils.spatial_lda.model
+#from utils.spatial_lda.featurization import make_merged_difference_matrices
 import warnings
 from scipy.stats import norm as stats_norm
 from scipy.sparse.linalg import svds
