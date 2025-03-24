@@ -14,7 +14,6 @@ from cvxpy import Variable
 from cvxpy.problems.objective import Minimize
 from cvxpy.problems.problem import Problem
 
-import generate_topic_model as gen_model
 from utils import *
 from graphSVD import *
 
@@ -29,7 +28,6 @@ class GpLSI_(object):
         eps=1e-05,
         method="two-step",
         use_mpi=False,
-        return_anchor_docs=True,
         verbose=0,
         precondition=False,
         initialize=True,
@@ -48,7 +46,6 @@ class GpLSI_(object):
         self.maxiter = maxiter
         self.eps = eps
         self.method = method
-        self.return_anchor_docs = return_anchor_docs
         self.verbose = verbose
         self.use_mpi = use_mpi
         self.precondition = precondition
@@ -56,7 +53,7 @@ class GpLSI_(object):
         self.fast_option = fast_option
         self.sparsity = sparsity
 
-    def fit(self, X, N, K, edge_df, weights):
+    def fit(self, X, K, edge_df, weights):
         if self.method == "pLSI":
             print("Running pLSI...")
             self.U, self.L, self.V = svds(X, k=K)
@@ -79,7 +76,6 @@ class GpLSI_(object):
                 self.used_iters
             ) = graphSVD(
                 X,
-                N,
                 K,
                 edge_df,
                 weights,

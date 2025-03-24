@@ -1,8 +1,6 @@
+
 import os
 import sys
-import time
-import random
-import pickle
 import numpy as np
 from numpy.linalg import norm, svd, solve
 from scipy.linalg import inv, sqrtm
@@ -21,7 +19,6 @@ from multiprocessing import Pool
 
 def graphSVD(
     X,
-    N,
     K,
     edge_df,
     weights,
@@ -60,20 +57,15 @@ def graphSVD(
     srn, folds, G, mst = get_folds_disconnected_G(edge_df, nfolds=5)
 
     lambd_grid = (lamb_start * np.power(step_size, np.arange(grid_len))).tolist()
-    lambd_grid.insert(0, 1e-06)
-
-    beta_grid = (0.0001 * np.power(step_size+0.3, np.arange(grid_len+15))).tolist()  
+    lambd_grid.insert(0, 1e-04)
+    beta_grid = (0.0001 * np.power(step_size, np.arange(grid_len))).tolist()  
 
     if initialize:
         print('Initializing...')
-        colsums = np.sum(X, axis=0)
-        cov = X.T @ X - np.diag(colsums/N)
-        U, L, V  =svds(cov, k=K)
-        V  = V.T
+        U, V, L = ssvd_initial(X, method="theory", alpha_method=0.1, alpha_theory=0.6, huber_beta=0.95, sigma=None, r=K) 
         L = np.diag(L)
         V_init = V
         L_init = L
-        U, _, _ = svds(X, k=K)
         U_init = U
     else:
         U, L, V = svds(X, k=K)
@@ -83,7 +75,7 @@ def graphSVD(
         V_init = None
         L_init = None
 
-    lambd_list = [0,1,2,3]
+    lambd_list = [0,1,2]
     score = 1
     niter = 0
     while score > eps and niter < maxiter:
@@ -98,7 +90,7 @@ def graphSVD(
         X_hat_old = (P_U_old @ X[idx,:]) @ P_V_old
         if fast_option:
             if lambd_list[-1]==lambd_list[-2]==lambd_list[-3]:
-                U, _, _ = update_U_tilde(X, V, G, weights, folds, 
+                U, lambd, lambd_errs = update_U_tilde(X, V, G, weights, folds, 
                                                       lambd_grid, 
                                                       fast=True, 
                                                       lambd_prev=lambd_list[-1])
