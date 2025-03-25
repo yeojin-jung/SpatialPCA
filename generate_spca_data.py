@@ -177,7 +177,7 @@ def generate_weights_edge(coords_df, nearest_n, phi):
     return weights_csr, edge_df  # Return the sparse matrix and edge DataFrame.
 
 
-def generate_data(n, m, p, k, r, n_clusters):
+def generate_data(n, m, p, k, r, n_clusters, alpha):
     coords_df = generate_graph_kmeans(n, p, k, r, n_clusters)
     weights, edge_df = generate_weights_edge(coords_df, k, 0.05)
 
@@ -201,8 +201,7 @@ def generate_data(n, m, p, k, r, n_clusters):
     V_true = np.hstack((V0, V1_norm)) # p x p
     print(np.allclose(V_true.T @ V_true, np.eye(p), atol=1e-8))
 
-    alpha = 1
-    delta = 0.5
+    delta = 0.9
     Lambda1 = np.diag([alpha] * k)
     Lambda2 = np.diag([alpha - delta] * (n - k))
     Lambda = np.block([[Lambda1, np.zeros((k, p - k))],
