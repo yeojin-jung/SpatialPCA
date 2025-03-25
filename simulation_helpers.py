@@ -1,7 +1,5 @@
-from ast import main
 import time
 import numpy as np
-from numpy.linalg import norm
 
 from generate_spca_data import *
 from utils import *
@@ -33,7 +31,7 @@ def run_simul(
         os.system(f"echo Running trial {trial}...")
         if not (start_seed is None):
             np.random.seed(start_seed + trial)
-            X, U_true, Lambda_true, V_true, coords_df, edge_df, weights = generate_data(n, m, p, k, r, n_clusters)
+        X, U_true, Lambda_true, V_true, coords_df, edge_df, weights = generate_data(n, m, p, k, r, n_clusters)
 
         # SPCA
         start_time = time.time()
@@ -89,6 +87,8 @@ def run_simul(
         results["m"].append(m)
         results["k"].append(k)
         results["n_clusters"].append(n_clusters)
+        results["cv_lambda"].append(model_spca.lambd)
+        results["cv_beta"].append(model_spca.beta_cv)
 
         results['spca_err_U_l1'].append(err_U_spca_l1)
         results['spca_err_U_l2'].append(err_U_spca_l2)
@@ -119,38 +119,39 @@ def run_simul(
     return results
 
 if __name__ == "__main__":
-    p_list = [500, 1000, 1500, 3000, 5000]
-    nclusters_list = [30, 50, 100]
-    #nclusters_list = [30, 50, 100, 150, 300]
-    n = 1000
-    m = 50
-    k = 3
-    r = 0.05
-
+    task_id = int(sys.argv[1])
+    configs = pd.read_csv("config.txt", sep=" ")
+    config = configs[configs["task_id"] == task_id]
+    k = int(config["K"].iloc[0])
+    m = int(config["m"].iloc[0])
+    n = int(config["n"].iloc[0])
+    nsim = int(config["nsim"].iloc[0])
+    p = int(config["p"].iloc[0])
+    n_clusters = int(config["n_clusters"].iloc[0])
+    del config
     results_dir = os.path.join(os.getcwd(), "output")
     if not os.path.exists(results_dir):
         try:
             os.makedirs(results_dir)
         except:
             pass
-
-    for p in p_list:
-        for n_clusters in nclusters_list:
-            msg = "Running experiment with n={}, p={}, m={}, k={}, n_clusters={}".format(n, p, m, k, n_clusters)
-            print(msg)
-            results = run_simul(
-                nsim = 5,
+    msg = "Running experiment with K={}, m={}, n={}, p={}, n_clusters={}".format(k, m, n, p, n_clusters)
+    os.system(f"echo {msg}")
+    results = run_simul(
+                nsim = 1,
                 n = n,
                 p = p,
                 m = m,
                 k = k,
-                r = r,
+                r = 0.05,
                 n_clusters = n_clusters
             )
-            results_csv_loc = os.path.join(results_dir, f"results_n={n}_p={p}_m={m}_k={k}_n_clusters={n_clusters}.csv")
-            results.to_csv(
-                results_csv_loc,
-                mode="a",
-                header=not os.path.exists(results_csv_loc),
-                index=False,
-            )
+    results_csv_loc = os.path.join(results_dir, f"results_n={n}_p={p}_m={m}_k={k}_n_clusters={n_clusters}.csv")
+    results.to_csv(
+        results_csv_loc,
+        mode="a",
+        header=not os.path.exists(results_csv_loc),
+        index=False,
+    )
+    os.system(f"echo Done with experiment {task_id}!")
+
